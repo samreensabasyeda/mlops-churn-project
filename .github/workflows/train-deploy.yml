@@ -1,0 +1,58 @@
+name: SageMaker Training and Model Registration
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: read
+    
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+          role-to-assume: ${{ secrets.AWS_IAM_ROLE }}
+          role-session-name: GitHubActions-SageMaker
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.9'
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install boto3 sagemaker mlflow xgboost pandas scikit-learn
+
+      - name: Trigger SageMaker Pipeline Execution
+        env:
+          PIPELINE_NAME: 'churn-pipeline'
+        run: |
+          python <<EOF
+          import boto3
+          import os
+
+          pipeline_name = os.getenv('PIPELINE_NAME')
+          if not pipeline_name:
+              raise ValueError('Pipeline name not specified')
+
+          client = boto3.client('sagemaker')
+          try:
+              response = client.start_pipeline_execution(
+                  PipelineName=pipeline_name
+              )
+              print(f'Successfully started pipeline: {response["PipelineExecutionArn"]}')
+          except Exception as e:
+              print(f'Error starting pipeline: {str(e)}')
+              raise
+          EOF
