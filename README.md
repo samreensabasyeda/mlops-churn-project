@@ -105,7 +105,9 @@ curl https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
 ### **4.2 Create the Kubernetes Cluster**  
 ```bash
-eksctl create cluster --name churn-mlops --region us-east-1 --nodegroup-name workers --node-type t3.medium --nodes 2 --managed
+eksctl create cluster --name=churnmodel --region=ap-south-1 --zones=ap-south-1a,ap-south-1b --nodegroup-name=churn-ng-public1 --node-type=t3.m
+edium --nodes=2 --nodes-min=2 --nodes-max=4 --node-volume-size=20 --ssh-access --ssh-public-key=aiops --managed --asg-access --external-dns-acce
+ss --full-ecr-access --appmesh-access --alb-ingress-access
 ```
 ⏳ **Wait ~15 mins** (AWS is setting up servers for you).  
 
