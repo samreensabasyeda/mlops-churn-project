@@ -13,15 +13,20 @@ import sagemaker
 region = boto3.Session().region_name
 session = PipelineSession()
 role = "arn:aws:iam::911167906047:role/SageMakerChurnRole"
-bucket = "mlops-churn-model-artifacts"  # ✅ Ensure this bucket exists in S3
+bucket = "mlops-churn-model-artifacts"  # ✅ Must exist in S3
 
-# 📦 Pipeline parameter
+# 📦 Pipeline parameters
 input_data = ParameterString(
     name="InputDataUrl",
     default_value="s3://mlops-churn-processed-data/preprocessed.csv"
 )
 
-# 🔁 Preprocessing Step
+model_package_group_name = ParameterString(
+    name="ModelPackageGroup",
+    default_value="ChurnModelPackageGroup"
+)
+
+# 🔄 Preprocessing Step
 script_processor = ScriptProcessor(
     image_uri=sagemaker.image_uris.retrieve("sklearn", region, version="1.2-1"),
     command=["python3"],
@@ -79,7 +84,7 @@ train_step = TrainingStep(
 # 🏷️ Model Registration Step
 model = Model(
     image_uri=xgb_container,
-    model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts.expr,  # ✅ Use .expr for pipeline variable
+    model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts.expr,
     role=role,
     sagemaker_session=session
 )
@@ -89,7 +94,7 @@ register_model_step = ModelStep(
     step_args=model.register(
         content_types=["text/csv"],
         response_types=["text/csv"],
-        model_package_group_name="ChurnModelPackageGroup",
+        model_package_group_name=model_package_group_name.expr,
         approval_status="PendingManualApproval"
     )
 )
@@ -97,12 +102,11 @@ register_model_step = ModelStep(
 # 🎯 Final Pipeline
 pipeline = Pipeline(
     name="churn-pipeline",
-    parameters=[input_data],
+    parameters=[input_data, model_package_group_name],
     steps=[processing_step, train_step, register_model_step],
     sagemaker_session=session
 )
 
-# 🚀 Execute pipeline
 if __name__ == "__main__":
     pipeline.upsert(role_arn=role)
     execution = pipeline.start()
