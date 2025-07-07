@@ -3,50 +3,68 @@ import mlflow
 import mlflow.xgboost
 import xgboost as xgb
 import pandas as pd
-from sklearn.model_selection import train_test_split
-from sklearn.metrics import accuracy_score
+import argparse
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 
-def train(train_path, model_output_dir):
-    # ✅ Set the MLflow Tracking URI
-    mlflow.set_tracking_uri("http://13.203.193.28:30172/")
-
-    # Create or set the experiment
-    mlflow.set_experiment("ChurnPrediction")
+def train():
+    # Set MLflow tracking
+    mlflow.set_tracking_uri(os.environ.get('MLFLOW_TRACKING_URI'))
+    mlflow.set_experiment(os.environ.get('MLFLOW_EXPERIMENT_NAME'))
     
-    # Load and prepare data
-    df = pd.read_csv(train_path)
-    X = df.drop('Churn', axis=1)
-    y = df['Churn']
-
-    X_train, X_val, y_train, y_val = train_test_split(X, y, test_size=0.2, random_state=42)
-
+    parser = argparse.ArgumentParser()
+    parser.add_argument('--train', type=str, default=os.environ.get('SM_CHANNEL_TRAIN'))
+    parser.add_argument('--validation', type=str, default=os.environ.get('SM_CHANNEL_VALIDATION'))
+    parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR'))
+    args = parser.parse_args()
+    
+    # Load data
+    train_df = pd.read_csv(f"{args.train}/train.csv")
+    val_df = pd.read_csv(f"{args.validation}/validation.csv")
+    
+    X_train = train_df.drop('Churn', axis=1)
+    y_train = train_df['Churn']
+    X_val = val_df.drop('Churn', axis=1)
+    y_val = val_df['Churn']
+    
+    # Create DMatrix
     dtrain = xgb.DMatrix(X_train, label=y_train)
     dval = xgb.DMatrix(X_val, label=y_val)
-
+    
     params = {
         "objective": "binary:logistic",
         "eval_metric": "logloss",
         "use_label_encoder": False,
         "seed": 42
     }
-
-    # 💡 Start MLflow run and log metrics
+    
+    # MLflow tracking
     with mlflow.start_run():
-        booster = xgb.train(params, dtrain, num_boost_round=100)
+        # Train model
+        model = xgb.train(
+            params,
+            dtrain,
+            num_boost_round=100,
+            evals=[(dval, "validation")],
+            early_stopping_rounds=10
+        )
         
-        preds = booster.predict(dval)
+        # Evaluate
+        preds = model.predict(dval)
         preds_binary = [1 if p > 0.5 else 0 for p in preds]
-        acc = accuracy_score(y_val, preds_binary)
         
-        mlflow.log_metric("val_accuracy", acc)
-        mlflow.xgboost.log_model(booster, artifact_path="model")
-
-        # Save model for SageMaker deployment
-        model_path = os.path.join(model_output_dir, "xgboost-model")
-        booster.save_model(model_path)
+        # Log metrics
+        mlflow.log_metrics({
+            "accuracy": accuracy_score(y_val, preds_binary),
+            "precision": precision_score(y_val, preds_binary),
+            "recall": recall_score(y_val, preds_binary),
+            "f1": f1_score(y_val, preds_binary)
+        })
+        
+        # Log model
+        mlflow.xgboost.log_model(model, "model")
+        
+        # Save model for SageMaker
+        model.save_model(os.path.join(args.model_dir, "xgboost-model"))
 
 if __name__ == "__main__":
-    import sys
-    train_path = sys.argv[1]
-    model_output_dir = sys.argv[2]
-    train(train_path, model_output_dir)
+    train()

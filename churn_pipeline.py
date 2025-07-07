@@ -9,31 +9,30 @@ from sagemaker.model import Model
 from sagemaker.xgboost.estimator import XGBoost
 import sagemaker
 
-# 🔧 Environment setup
+# Environment setup
 region = boto3.Session().region_name
 session = PipelineSession()
 role = "arn:aws:iam::911167906047:role/SageMakerChurnRole"
-bucket = "mlops-churn-model-artifacts"  # ✅ Must exist in S3
+bucket = "mlops-churn-model-artifacts"
 
-# 📦 Pipeline parameters
+# Pipeline parameter
 input_data = ParameterString(
     name="InputDataUrl",
     default_value="s3://mlops-churn-processed-data/preprocessed.csv"
 )
 
-model_package_group_name = ParameterString(
-    name="ModelPackageGroup",
-    default_value="ChurnModelPackageGroup"
-)
-
-# 🔄 Preprocessing Step
+# Preprocessing Step
 script_processor = ScriptProcessor(
     image_uri=sagemaker.image_uris.retrieve("sklearn", region, version="1.2-1"),
     command=["python3"],
     role=role,
     instance_type="ml.m5.xlarge",
     instance_count=1,
-    sagemaker_session=session
+    sagemaker_session=session,
+    environment={
+        "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
+        "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
+    }
 )
 
 processing_step = ProcessingStep(
@@ -47,14 +46,20 @@ processing_step = ProcessingStep(
     ],
     outputs=[
         ProcessingOutput(
-            output_name="processed_data",
-            source="/opt/ml/processing/output"
+            output_name="train",
+            source="/opt/ml/processing/output/train",
+            destination=f"s3://{bucket}/processed/train"
+        ),
+        ProcessingOutput(
+            output_name="validation",
+            source="/opt/ml/processing/output/validation",
+            destination=f"s3://{bucket}/processed/validation"
         )
     ],
     code="preprocessing.py"
 )
 
-# 🧪 Training Step
+# Training Step
 xgb_container = sagemaker.image_uris.retrieve("xgboost", region, version="1.5-1")
 
 xgb_estimator = XGBoost(
@@ -69,7 +74,12 @@ xgb_estimator = XGBoost(
     hyperparameters={
         "objective": "binary:logistic",
         "eval_metric": "logloss",
-        "use_label_encoder": False
+        "use_label_encoder": False,
+        "seed": 42
+    },
+    environment={
+        "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
+        "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
     }
 )
 
@@ -77,16 +87,27 @@ train_step = TrainingStep(
     name="TrainModel",
     estimator=xgb_estimator,
     inputs={
-        "train": processing_step.properties.ProcessingOutputConfig.Outputs["processed_data"].S3Output.S3Uri
+        "train": sagemaker.inputs.TrainingInput(
+            s3_data=processing_step.properties.ProcessingOutputConfig.Outputs["train"].S3Output.S3Uri,
+            content_type="text/csv"
+        ),
+        "validation": sagemaker.inputs.TrainingInput(
+            s3_data=processing_step.properties.ProcessingOutputConfig.Outputs["validation"].S3Output.S3Uri,
+            content_type="text/csv"
+        )
     }
 )
 
-# 🏷️ Model Registration Step
+# Model Registration Step
 model = Model(
     image_uri=xgb_container,
-    model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts.expr,
+    model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts,
     role=role,
-    sagemaker_session=session
+    sagemaker_session=session,
+    env={
+        "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
+        "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
+    }
 )
 
 register_model_step = ModelStep(
@@ -94,19 +115,20 @@ register_model_step = ModelStep(
     step_args=model.register(
         content_types=["text/csv"],
         response_types=["text/csv"],
-        model_package_group_name=model_package_group_name.expr,
+        model_package_group_name="ChurnModelPackageGroup",
         approval_status="PendingManualApproval"
     )
 )
 
-# 🎯 Final Pipeline
+# Final Pipeline
 pipeline = Pipeline(
     name="churn-pipeline",
-    parameters=[input_data, model_package_group_name],
+    parameters=[input_data],
     steps=[processing_step, train_step, register_model_step],
     sagemaker_session=session
 )
 
+# Execute pipeline
 if __name__ == "__main__":
     pipeline.upsert(role_arn=role)
     execution = pipeline.start()
