@@ -1,20 +1,20 @@
 import boto3
 import sagemaker
-from sagemaker.workflow.steps import ProcessingStep, TrainingStep, ModelStep
 from sagemaker.processing import ScriptProcessor, ProcessingInput, ProcessingOutput
-from sagemaker.xgboost.estimator import XGBoost
+from sagemaker.workflow.steps import ProcessingStep, TrainingStep
 from sagemaker.workflow.pipeline import Pipeline
 from sagemaker.workflow.parameters import ParameterString
 from sagemaker.workflow.model_step import ModelStep
 from sagemaker.model import Model
+from sagemaker.xgboost.estimator import XGBoost
 
-# Initialize session and roles
+# 📍 Initialize environment
 region = boto3.Session().region_name
 session = sagemaker.Session()
 role = sagemaker.get_execution_role()
 bucket = session.default_bucket()
 
-# Pipeline parameters
+# 📦 Pipeline parameters
 input_data = ParameterString(
     name="InputDataUrl",
     default_value="s3://mlops-churn-processed-data/preprocessed.csv"
@@ -22,13 +22,13 @@ input_data = ParameterString(
 model_package_group_name = "ChurnModelPackageGroup"
 pipeline_name = "churn-pipeline"
 
-# Processing step
+# 🔄 Preprocessing step using preprocessing.py
 script_processor = ScriptProcessor(
     image_uri=sagemaker.image_uris.retrieve("sklearn", region),
     command=["python3"],
     role=role,
-    instance_count=1,
     instance_type="ml.m5.xlarge",
+    instance_count=1,
     sagemaker_session=session
 )
 
@@ -50,14 +50,14 @@ processing_step = ProcessingStep(
     code="preprocessing.py"
 )
 
-# Training step
+# 📚 Training step using XGBoost and train.py
 xgb_container = sagemaker.image_uris.retrieve("xgboost", region, "1.6-1")
 
 xgb_estimator = XGBoost(
     entry_point="train.py",
     role=role,
-    instance_count=1,
     instance_type="ml.m5.xlarge",
+    instance_count=1,
     framework_version="1.6-1",
     py_version="py3",
     output_path="s3://mlops-churn-model-artifacts",
@@ -77,7 +77,7 @@ train_step = TrainingStep(
     }
 )
 
-# Model registration step
+# 🏷️ Model registration step
 model = Model(
     image_uri=xgb_container,
     model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts,
@@ -95,7 +95,7 @@ register_model_step = ModelStep(
     )
 )
 
-# Final pipeline definition
+# 🛠️ Final pipeline definition
 pipeline = Pipeline(
     name=pipeline_name,
     parameters=[input_data],
@@ -103,7 +103,7 @@ pipeline = Pipeline(
     sagemaker_session=session
 )
 
-# Create or update pipeline
+# 🚀 Create or update pipeline and execute
 if __name__ == "__main__":
     pipeline.upsert(role_arn=role)
     execution = pipeline.start()
