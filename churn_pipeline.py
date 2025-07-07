@@ -13,17 +13,15 @@ import sagemaker
 region = boto3.Session().region_name
 session = PipelineSession()
 role = "arn:aws:iam::911167906047:role/SageMakerChurnRole"
-bucket = session.default_bucket()
+bucket = "mlops-churn-model-artifacts"  # ✅ Ensure this bucket exists in S3
 
-# 📦 Pipeline parameters
+# 📦 Pipeline parameter
 input_data = ParameterString(
     name="InputDataUrl",
     default_value="s3://mlops-churn-processed-data/preprocessed.csv"
 )
-model_package_group_name = "ChurnModelPackageGroup"
-pipeline_name = "churn-pipeline"
 
-# 🔄 Preprocessing Step
+# 🔁 Preprocessing Step
 script_processor = ScriptProcessor(
     image_uri=sagemaker.image_uris.retrieve("sklearn", region, version="1.2-1"),
     command=["python3"],
@@ -51,7 +49,7 @@ processing_step = ProcessingStep(
     code="preprocessing.py"
 )
 
-# 📚 Training Step
+# 🧪 Training Step
 xgb_container = sagemaker.image_uris.retrieve("xgboost", region, version="1.5-1")
 
 xgb_estimator = XGBoost(
@@ -61,7 +59,7 @@ xgb_estimator = XGBoost(
     instance_count=1,
     framework_version="1.5-1",
     py_version="py3",
-    output_path="s3://mlops-churn-model-artifacts",
+    output_path=f"s3://{bucket}/output",
     sagemaker_session=session,
     hyperparameters={
         "objective": "binary:logistic",
@@ -78,10 +76,10 @@ train_step = TrainingStep(
     }
 )
 
-# 🏷️ Model Registration Step with .expr for pipeline variable
+# 🏷️ Model Registration Step
 model = Model(
     image_uri=xgb_container,
-    model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts.expr,
+    model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts.expr,  # ✅ Use .expr for pipeline variable
     role=role,
     sagemaker_session=session
 )
@@ -91,19 +89,20 @@ register_model_step = ModelStep(
     step_args=model.register(
         content_types=["text/csv"],
         response_types=["text/csv"],
-        model_package_group_name=model_package_group_name,
+        model_package_group_name="ChurnModelPackageGroup",
         approval_status="PendingManualApproval"
     )
 )
 
-# 🔁 Assemble and execute pipeline
+# 🎯 Final Pipeline
 pipeline = Pipeline(
-    name=pipeline_name,
+    name="churn-pipeline",
     parameters=[input_data],
     steps=[processing_step, train_step, register_model_step],
     sagemaker_session=session
 )
 
+# 🚀 Execute pipeline
 if __name__ == "__main__":
     pipeline.upsert(role_arn=role)
     execution = pipeline.start()
