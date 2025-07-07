@@ -28,11 +28,7 @@ script_processor = ScriptProcessor(
     role=role,
     instance_type="ml.m5.xlarge",
     instance_count=1,
-    sagemaker_session=session,
-    environment={
-        "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
-        "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
-    }
+    sagemaker_session=session
 )
 
 processing_step = ProcessingStep(
