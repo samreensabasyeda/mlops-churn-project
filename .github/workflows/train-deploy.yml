@@ -10,7 +10,7 @@ jobs:
     permissions:
       id-token: write
       contents: read
-    
+
     steps:
       - name: Checkout repository
         uses: actions/checkout@v3
@@ -34,25 +34,20 @@ jobs:
           python -m pip install --upgrade pip
           pip install boto3 sagemaker mlflow xgboost pandas scikit-learn
 
+      - name: Create SageMaker Pipeline
+        run: |
+          python churn_pipeline.py
+
       - name: Trigger SageMaker Pipeline Execution
         env:
-          PIPELINE_NAME: 'churn-pipeline'
+          PIPELINE_NAME: churn-pipeline
         run: |
-          python <<EOF
+          python - <<EOF
           import boto3
           import os
 
           pipeline_name = os.getenv('PIPELINE_NAME')
-          if not pipeline_name:
-              raise ValueError('Pipeline name not specified')
-
           client = boto3.client('sagemaker')
-          try:
-              response = client.start_pipeline_execution(
-                  PipelineName=pipeline_name
-              )
-              print(f'Successfully started pipeline: {response["PipelineExecutionArn"]}')
-          except Exception as e:
-              print(f'Error starting pipeline: {str(e)}')
-              raise
+          response = client.start_pipeline_execution(PipelineName=pipeline_name)
+          print(f'Successfully started pipeline: {response["PipelineExecutionArn"]}')
           EOF
