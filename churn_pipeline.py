@@ -11,7 +11,7 @@ from sagemaker.xgboost.estimator import XGBoost
 # 🔧 Environment setup
 region = boto3.Session().region_name
 session = sagemaker.Session()
-role = "arn:aws:iam::911167906047:role/SageMakerChurnRole"  # 💯 Your IAM role
+role = "arn:aws:iam::911167906047:role/SageMakerChurnRole"
 bucket = session.default_bucket()
 
 # 📦 Pipeline parameters
@@ -51,7 +51,7 @@ processing_step = ProcessingStep(
     code="preprocessing.py"
 )
 
-# 🧪 Training Step
+# 🧪 Training Step (using supported XGBoost version)
 xgb_container = sagemaker.image_uris.retrieve("xgboost", region, version="1.5-1")
 
 xgb_estimator = XGBoost(
@@ -59,7 +59,7 @@ xgb_estimator = XGBoost(
     role=role,
     instance_type="ml.m5.xlarge",
     instance_count=1,
-    framework_version="1.6-1",
+    framework_version="1.5-1",  # ✅ Must match version above
     py_version="py3",
     output_path="s3://mlops-churn-model-artifacts",
     sagemaker_session=session,
