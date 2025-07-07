@@ -7,8 +7,13 @@ from sklearn.model_selection import train_test_split
 from sklearn.metrics import accuracy_score
 
 def train(train_path, model_output_dir):
+    # ✅ Set the MLflow Tracking URI
+    mlflow.set_tracking_uri("http://13.203.193.28:30172/")
+
+    # Create or set the experiment
     mlflow.set_experiment("ChurnPrediction")
     
+    # Load and prepare data
     df = pd.read_csv(train_path)
     X = df.drop('Churn', axis=1)
     y = df['Churn']
@@ -25,6 +30,7 @@ def train(train_path, model_output_dir):
         "seed": 42
     }
 
+    # 💡 Start MLflow run and log metrics
     with mlflow.start_run():
         booster = xgb.train(params, dtrain, num_boost_round=100)
         
@@ -35,7 +41,7 @@ def train(train_path, model_output_dir):
         mlflow.log_metric("val_accuracy", acc)
         mlflow.xgboost.log_model(booster, artifact_path="model")
 
-        # Save model for SageMaker
+        # Save model for SageMaker deployment
         model_path = os.path.join(model_output_dir, "xgboost-model")
         booster.save_model(model_path)
 
