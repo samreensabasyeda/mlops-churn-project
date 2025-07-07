@@ -8,10 +8,10 @@ from sagemaker.workflow.model_step import ModelStep
 from sagemaker.model import Model
 from sagemaker.xgboost.estimator import XGBoost
 
-# 📍 Initialize environment
+# 🔧 Environment setup
 region = boto3.Session().region_name
 session = sagemaker.Session()
-role = sagemaker.get_execution_role()
+role = "arn:aws:iam::911167906047:role/SageMakerChurnRole"  # 💯 Your IAM role
 bucket = session.default_bucket()
 
 # 📦 Pipeline parameters
@@ -19,10 +19,11 @@ input_data = ParameterString(
     name="InputDataUrl",
     default_value="s3://mlops-churn-processed-data/preprocessed.csv"
 )
+
 model_package_group_name = "ChurnModelPackageGroup"
 pipeline_name = "churn-pipeline"
 
-# 🔄 Preprocessing step using preprocessing.py
+# 🔄 Preprocessing Step
 script_processor = ScriptProcessor(
     image_uri=sagemaker.image_uris.retrieve("sklearn", region),
     command=["python3"],
@@ -50,7 +51,7 @@ processing_step = ProcessingStep(
     code="preprocessing.py"
 )
 
-# 📚 Training step using XGBoost and train.py
+# 🧪 Training Step
 xgb_container = sagemaker.image_uris.retrieve("xgboost", region, "1.6-1")
 
 xgb_estimator = XGBoost(
@@ -77,7 +78,7 @@ train_step = TrainingStep(
     }
 )
 
-# 🏷️ Model registration step
+# 🏷️ Model Registration Step
 model = Model(
     image_uri=xgb_container,
     model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts,
@@ -95,7 +96,7 @@ register_model_step = ModelStep(
     )
 )
 
-# 🛠️ Final pipeline definition
+# 🔁 Assemble Pipeline
 pipeline = Pipeline(
     name=pipeline_name,
     parameters=[input_data],
@@ -103,7 +104,7 @@ pipeline = Pipeline(
     sagemaker_session=session
 )
 
-# 🚀 Create or update pipeline and execute
+# 🚀 Create or Update and Run
 if __name__ == "__main__":
     pipeline.upsert(role_arn=role)
     execution = pipeline.start()
