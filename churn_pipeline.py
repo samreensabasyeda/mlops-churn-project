@@ -1,5 +1,5 @@
 import boto3
-import sagemaker
+from sagemaker.workflow.pipeline_context import PipelineSession
 from sagemaker.processing import ScriptProcessor, ProcessingInput, ProcessingOutput
 from sagemaker.workflow.steps import ProcessingStep, TrainingStep
 from sagemaker.workflow.pipeline import Pipeline
@@ -7,10 +7,11 @@ from sagemaker.workflow.parameters import ParameterString
 from sagemaker.workflow.model_step import ModelStep
 from sagemaker.model import Model
 from sagemaker.xgboost.estimator import XGBoost
+import sagemaker
 
 # 🔧 Environment setup
 region = boto3.Session().region_name
-session = sagemaker.Session()
+session = PipelineSession()
 role = "arn:aws:iam::911167906047:role/SageMakerChurnRole"
 bucket = session.default_bucket()
 
@@ -19,7 +20,6 @@ input_data = ParameterString(
     name="InputDataUrl",
     default_value="s3://mlops-churn-processed-data/preprocessed.csv"
 )
-
 model_package_group_name = "ChurnModelPackageGroup"
 pipeline_name = "churn-pipeline"
 
@@ -51,7 +51,7 @@ processing_step = ProcessingStep(
     code="preprocessing.py"
 )
 
-# 🧪 Training Step (using supported XGBoost version)
+# 📚 Training Step
 xgb_container = sagemaker.image_uris.retrieve("xgboost", region, version="1.5-1")
 
 xgb_estimator = XGBoost(
@@ -59,7 +59,7 @@ xgb_estimator = XGBoost(
     role=role,
     instance_type="ml.m5.xlarge",
     instance_count=1,
-    framework_version="1.5-1",  # ✅ Must match version above
+    framework_version="1.5-1",
     py_version="py3",
     output_path="s3://mlops-churn-model-artifacts",
     sagemaker_session=session,
@@ -78,7 +78,7 @@ train_step = TrainingStep(
     }
 )
 
-# 🏷️ Model Registration Step
+# 🏷️ Model Registration Step with .expr for pipeline variable
 model = Model(
     image_uri=xgb_container,
     model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts.expr,
@@ -96,7 +96,7 @@ register_model_step = ModelStep(
     )
 )
 
-# 🔁 Assemble Pipeline
+# 🔁 Assemble and execute pipeline
 pipeline = Pipeline(
     name=pipeline_name,
     parameters=[input_data],
@@ -104,7 +104,6 @@ pipeline = Pipeline(
     sagemaker_session=session
 )
 
-# 🚀 Create or Update and Run
 if __name__ == "__main__":
     pipeline.upsert(role_arn=role)
     execution = pipeline.start()
