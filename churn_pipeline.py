@@ -8,6 +8,11 @@ from sagemaker.workflow.model_step import ModelStep
 from sagemaker.model import Model
 from sagemaker.xgboost.estimator import XGBoost
 import sagemaker
+import logging
+
+# Configure logging
+logging.basicConfig(level=logging.INFO)
+logger = logging.getLogger(__name__)
 
 # Environment setup
 region = boto3.Session().region_name
@@ -15,117 +20,190 @@ session = PipelineSession()
 role = "arn:aws:iam::911167906047:role/SageMakerChurnRole"
 bucket = "mlops-churn-model-artifacts"
 
-# Pipeline parameter
+# Verify S3 bucket exists
+s3 = boto3.client('s3')
+try:
+    s3.head_bucket(Bucket=bucket)
+except Exception as e:
+    logger.error(f"Bucket {bucket} not accessible: {str(e)}")
+    raise
+
+# Pipeline parameter with validation
 input_data = ParameterString(
     name="InputDataUrl",
     default_value="s3://mlops-churn-processed-data/preprocessed.csv"
 )
 
-# Preprocessing Step
-script_processor = ScriptProcessor(
-    image_uri=sagemaker.image_uris.retrieve("sklearn", region, version="1.2-1"),
-    command=["python3"],
-    role=role,
-    instance_type="ml.m5.xlarge",
-    instance_count=1,
-    sagemaker_session=session
-)
+# Preprocessing Step with explicit container version
+try:
+    sklearn_image_uri = sagemaker.image_uris.retrieve(
+        framework="sklearn",
+        region=region,
+        version="1.2-1",
+        py_version="py3",
+        instance_type="ml.m5.xlarge"
+    )
+    
+    script_processor = ScriptProcessor(
+        image_uri=sklearn_image_uri,
+        command=["python3"],
+        role=role,
+        instance_type="ml.m5.xlarge",
+        instance_count=1,
+        sagemaker_session=session,
+        base_job_name="churn-preprocess"
+    )
 
-processing_step = ProcessingStep(
-    name="PreprocessData",
-    processor=script_processor,
-    inputs=[
-        ProcessingInput(
-            source=input_data,
-            destination="/opt/ml/processing/input"
-        )
-    ],
-    outputs=[
-        ProcessingOutput(
-            output_name="train",
-            source="/opt/ml/processing/output/train",
-            destination=f"s3://{bucket}/processed/train"
-        ),
-        ProcessingOutput(
-            output_name="validation",
-            source="/opt/ml/processing/output/validation",
-            destination=f"s3://{bucket}/processed/validation"
-        )
-    ],
-    code="preprocessing.py"
-)
+    processing_step = ProcessingStep(
+        name="PreprocessData",
+        processor=script_processor,
+        inputs=[
+            ProcessingInput(
+                source=input_data,
+                destination="/opt/ml/processing/input",
+                s3_data_type="S3Prefix",
+                s3_input_mode="File"
+            )
+        ],
+        outputs=[
+            ProcessingOutput(
+                output_name="train",
+                source="/opt/ml/processing/output/train",
+                destination=f"s3://{bucket}/processed/train",
+                s3_upload_mode="EndOfJob"
+            ),
+            ProcessingOutput(
+                output_name="validation",
+                source="/opt/ml/processing/output/validation",
+                destination=f"s3://{bucket}/processed/validation",
+                s3_upload_mode="EndOfJob"
+            )
+        ],
+        code="preprocessing.py"
+    )
+except Exception as e:
+    logger.error(f"Error creating processing step: {str(e)}")
+    raise
 
-# Training Step
-xgb_container = sagemaker.image_uris.retrieve("xgboost", region, version="1.5-1")
+# Training Step with explicit container version
+try:
+    xgb_container = sagemaker.image_uris.retrieve(
+        framework="xgboost",
+        region=region,
+        version="1.5-1",
+        py_version="py3",
+        instance_type="ml.m5.xlarge"
+    )
 
-xgb_estimator = XGBoost(
-    entry_point="train.py",
-    role=role,
-    instance_type="ml.m5.xlarge",
-    instance_count=1,
-    framework_version="1.5-1",
-    py_version="py3",
-    output_path=f"s3://{bucket}/output",
-    sagemaker_session=session,
-    hyperparameters={
-        "objective": "binary:logistic",
-        "eval_metric": "logloss",
-        "use_label_encoder": False,
-        "seed": 42
-    },
-    environment={
-        "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
-        "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
-    }
-)
+    xgb_estimator = XGBoost(
+        entry_point="train.py",
+        role=role,
+        instance_type="ml.m5.xlarge",
+        instance_count=1,
+        framework_version="1.5-1",
+        py_version="py3",
+        output_path=f"s3://{bucket}/output",
+        sagemaker_session=session,
+        hyperparameters={
+            "objective": "binary:logistic",
+            "eval_metric": "logloss",
+            "use_label_encoder": False,
+            "seed": 42
+        },
+        environment={
+            "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
+            "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
+        },
+        base_job_name="churn-train"
+    )
 
-train_step = TrainingStep(
-    name="TrainModel",
-    estimator=xgb_estimator,
-    inputs={
-        "train": sagemaker.inputs.TrainingInput(
-            s3_data=processing_step.properties.ProcessingOutputConfig.Outputs["train"].S3Output.S3Uri,
-            content_type="text/csv"
-        ),
-        "validation": sagemaker.inputs.TrainingInput(
-            s3_data=processing_step.properties.ProcessingOutputConfig.Outputs["validation"].S3Output.S3Uri,
-            content_type="text/csv"
-        )
-    }
-)
+    train_step = TrainingStep(
+        name="TrainModel",
+        estimator=xgb_estimator,
+        inputs={
+            "train": sagemaker.inputs.TrainingInput(
+                s3_data=processing_step.properties.ProcessingOutputConfig.Outputs["train"].S3Output.S3Uri,
+                content_type="text/csv",
+                s3_data_type="S3Prefix"
+            ),
+            "validation": sagemaker.inputs.TrainingInput(
+                s3_data=processing_step.properties.ProcessingOutputConfig.Outputs["validation"].S3Output.S3Uri,
+                content_type="text/csv",
+                s3_data_type="S3Prefix"
+            )
+        }
+    )
+except Exception as e:
+    logger.error(f"Error creating training step: {str(e)}")
+    raise
 
 # Model Registration Step
-model = Model(
-    image_uri=xgb_container,
-    model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts,
-    role=role,
-    sagemaker_session=session,
-    env={
-        "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
-        "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
-    }
-)
-
-register_model_step = ModelStep(
-    name="RegisterModel",
-    step_args=model.register(
-        content_types=["text/csv"],
-        response_types=["text/csv"],
-        model_package_group_name="ChurnModelPackageGroup",
-        approval_status="PendingManualApproval"
+try:
+    model = Model(
+        image_uri=xgb_container,
+        model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts,
+        role=role,
+        sagemaker_session=session,
+        env={
+            "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
+            "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
+        }
     )
-)
 
-# Final Pipeline
-pipeline = Pipeline(
-    name="churn-pipeline",
-    parameters=[input_data],
-    steps=[processing_step, train_step, register_model_step],
-    sagemaker_session=session
-)
+    register_model_step = ModelStep(
+        name="RegisterModel",
+        step_args=model.register(
+            content_types=["text/csv"],
+            response_types=["text/csv"],
+            inference_instances=["ml.m5.xlarge"],
+            transform_instances=["ml.m5.xlarge"],
+            model_package_group_name="ChurnModelPackageGroup",
+            approval_status="PendingManualApproval",
+            model_metrics={
+                "ModelQuality": {
+                    "Statistics": {
+                        "ContentType": "application/json",
+                        "S3Uri": f"s3://{bucket}/metrics/model_metrics.json"
+                    }
+                }
+            }
+        )
+    )
+except Exception as e:
+    logger.error(f"Error creating model step: {str(e)}")
+    raise
 
-# Execute pipeline
+# Final Pipeline with tags
+try:
+    pipeline = Pipeline(
+        name="churn-pipeline",
+        parameters=[input_data],
+        steps=[processing_step, train_step, register_model_step],
+        sagemaker_session=session
+    )
+except Exception as e:
+    logger.error(f"Error creating pipeline: {str(e)}")
+    raise
+
+# Execute pipeline with proper error handling
 if __name__ == "__main__":
-    pipeline.upsert(role_arn=role)
-    execution = pipeline.start()
-    execution.wait()
+    try:
+        logger.info("Creating/updating pipeline...")
+        pipeline.upsert(role_arn=role)
+        
+        logger.info("Starting pipeline execution...")
+        execution = pipeline.start()
+        
+        logger.info("Waiting for pipeline execution to complete...")
+        execution.wait(delay=60, max_attempts=1440)  # Wait up to 24 hours
+        
+        if execution.describe()["PipelineExecutionStatus"] == "Succeeded":
+            logger.info("Pipeline execution completed successfully!")
+        else:
+            logger.error("Pipeline execution failed!")
+            logger.error(f"Failure reason: {execution.describe().get('FailureReason', 'Unknown')}")
+            raise RuntimeError("Pipeline execution failed")
+            
+    except Exception as e:
+        logger.error(f"Pipeline execution failed: {str(e)}")
+        raise
