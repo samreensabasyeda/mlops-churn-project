@@ -81,7 +81,7 @@ train_step = TrainingStep(
 # 🏷️ Model Registration Step
 model = Model(
     image_uri=xgb_container,
-    model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts,
+    model_data=train_step.properties.ModelArtifacts.S3ModelArtifacts.expr,
     role=role,
     sagemaker_session=session
 )
