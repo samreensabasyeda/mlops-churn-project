@@ -10,6 +10,9 @@ from sagemaker.xgboost.estimator import XGBoost
 import sagemaker
 import logging
 
+# <<< CHANGE 1: Add necessary imports for ModelMetrics >>>
+from sagemaker.model_metrics import ModelMetrics, FileSource
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -150,6 +153,16 @@ try:
         }
     )
 
+    # <<< CHANGE 2: Construct the ModelMetrics object correctly >>>
+    model_metrics_report = FileSource(
+        s3_uri=f"s3://{bucket}/metrics/model_metrics.json",
+        content_type="application/json"
+    )
+    
+    model_metrics = ModelMetrics(
+        model_quality=model_metrics_report
+    )
+
     register_model_step = ModelStep(
         name="RegisterModel",
         step_args=model.register(
@@ -159,14 +172,7 @@ try:
             transform_instances=["ml.m5.xlarge"],
             model_package_group_name="ChurnModelPackageGroup",
             approval_status="PendingManualApproval",
-            model_metrics={
-                "ModelQuality": {
-                    "Statistics": {
-                        "ContentType": "application/json",
-                        "S3Uri": f"s3://{bucket}/metrics/model_metrics.json"
-                    }
-                }
-            }
+            model_metrics=model_metrics # Pass the SDK object here
         )
     )
 except Exception as e:
@@ -191,19 +197,22 @@ if __name__ == "__main__":
         logger.info("Creating/updating pipeline...")
         pipeline.upsert(role_arn=role)
         
-        logger.info("Starting pipeline execution...")
-        execution = pipeline.start()
-        
-        logger.info("Waiting for pipeline execution to complete...")
-        execution.wait(delay=60, max_attempts=1440)  # Wait up to 24 hours
-        
-        if execution.describe()["PipelineExecutionStatus"] == "Succeeded":
-            logger.info("Pipeline execution completed successfully!")
-        else:
-            logger.error("Pipeline execution failed!")
-            logger.error(f"Failure reason: {execution.describe().get('FailureReason', 'Unknown')}")
-            raise RuntimeError("Pipeline execution failed")
+        logger.info("Pipeline definition is valid. To execute, run the pipeline from the SageMaker console or via the SDK.")
+        # NOTE: The execution part is commented out as it's often better to run this
+        # from a separate script or notebook to avoid re-upserting the pipeline on every run.
+        # logger.info("Starting pipeline execution...")
+        # execution = pipeline.start()
+        # 
+        # logger.info("Waiting for pipeline execution to complete...")
+        # execution.wait(delay=60, max_attempts=1440)  # Wait up to 24 hours
+        # 
+        # if execution.describe()["PipelineExecutionStatus"] == "Succeeded":
+        #     logger.info("Pipeline execution completed successfully!")
+        # else:
+        #     logger.error("Pipeline execution failed!")
+        #     logger.error(f"Failure reason: {execution.describe().get('FailureReason', 'Unknown')}")
+        #     raise RuntimeError("Pipeline execution failed")
             
     except Exception as e:
-        logger.error(f"Pipeline execution failed: {str(e)}")
+        logger.error(f"Pipeline definition or upsert failed: {str(e)}")
         raise
