@@ -52,7 +52,7 @@ processing_step = ProcessingStep(
 )
 
 # 🧪 Training Step
-xgb_container = sagemaker.image_uris.retrieve("xgboost", region, "1.6-1")
+xgb_container = sagemaker.image_uris.retrieve("xgboost", region, version="1.5-1")
 
 xgb_estimator = XGBoost(
     entry_point="train.py",
