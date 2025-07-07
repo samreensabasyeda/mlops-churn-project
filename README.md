@@ -1,6 +1,6 @@
 # **MLOps Churn Prediction Project - Beginner's Guide**  
 ### **Part 1: Setting Up AWS Infrastructure**  
-*(Step-by-Step for Beginners)*  
+*(Step-by-Step for Beginners.)*  
 
 ---
 
