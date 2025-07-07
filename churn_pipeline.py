@@ -25,7 +25,7 @@ pipeline_name = "churn-pipeline"
 
 # 🔄 Preprocessing Step
 script_processor = ScriptProcessor(
-    image_uri=sagemaker.image_uris.retrieve("sklearn", region),
+    image_uri=sagemaker.image_uris.retrieve("sklearn", region, version="1.2-1"),
     command=["python3"],
     role=role,
     instance_type="ml.m5.xlarge",
