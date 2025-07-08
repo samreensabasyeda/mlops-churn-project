@@ -146,8 +146,10 @@ eksctl create cluster \
 
 ### **4.3 Deploy MLflow (Model Tracking Dashboard)**  
 ```bash
-helm repo add bitnami https://charts.bitnami.com/bitnami
-helm install mlflow bitnami/mlflow --namespace mlflow --create-namespace --set service.type=LoadBalancer
+helm repo add community-charts https://community-charts.github.io/helm-charts
+helm install my-mlflow community-charts/mlflow --version 0.7.19
+export POD_NAME=$(kubectl get pods --namespace default -l "app.kubernetes.io/name=mlflow,app.kubernetes.io/instance=my-mlflow" -o jsonpath="{.items[0].metadata.name}")
+export CONTAINER_PORT=$(kubectl get pod --namespace default $POD_NAME -o jsonpath="{.spec.containers[0].ports[0].containerPort}")
 ```
 🔗 **Get MLflow URL:**  
 ```bash
