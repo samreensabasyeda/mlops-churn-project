@@ -114,7 +114,7 @@ try:
             "seed": 42
         },
         environment={
-            "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
+            "MLFLOW_TRACKING_URI": "http://13.204.87.29:32386/",
             "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
         },
         base_job_name="churn-train"
@@ -148,7 +148,7 @@ try:
         role=role,
         sagemaker_session=session,
         env={
-            "MLFLOW_TRACKING_URI": "http://13.203.193.28:30172/",
+            "MLFLOW_TRACKING_URI": "http://13.204.87.29:32386/",
             "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
         }
     )

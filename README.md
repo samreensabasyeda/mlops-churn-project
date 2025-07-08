@@ -28,6 +28,7 @@ wget https://raw.githubusercontent.com/IBM/telco-customer-churn-on-icp4d/master/
 ```bash
 aws s3 mb s3://mlops-churn-raw-data  # Creates a storage "bucket"
 aws s3 cp Telco-Customer-Churn.csv s3://mlops-churn-raw-data/raw/  # Uploads file
+aws s3 mb s3://mlops-churn-model-artifacts #sagemaker push files
 ```
 ✅ **Check if it worked:**  
 ```bash
@@ -64,7 +65,12 @@ aws s3 ls s3://mlops-churn-raw-data/raw/  # Should show your file
     ]
   }
   ```
-
+### **Create Model Package Group**
+  ```bash
+     aws sagemaker create-model-package-group \
+    --model-package-group-name ChurnModelPackageGroup \
+    --model-package-group-description "Package group for churn prediction models"
+  ```
 ### **2.2 Lambda Role (Automates Training When New Data Comes)**  
 1. Same process, but select **Lambda** as the service.  
 2. Attach:  
