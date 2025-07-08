@@ -174,6 +174,176 @@ kubectl get svc -n mlflow
 | **MLflow Access** | Open `http://<EXTERNAL-IP>:5000` | MLflow dashboard loads |
 
 ---
+# 🚀 MLOps Churn Prediction Project — Part 2: Code, SageMaker Pipeline, MLflow Logging & GitHub Actions
+
+Welcome to Part 2 of our **End-to-End MLOps Churn Prediction Project**. In this part, we’ll focus on implementing the **core ML pipeline**, integrating **MLflow** for experiment tracking, automating workflows with **GitHub Actions**, and deploying everything in **SageMaker Pipelines**.
+
+---
+
+## 📌 Overview
+
+In this phase, you will:
+
+- ✅ Write modular scripts for preprocessing, training, and evaluation.
+- ✅ Integrate **MLflow** to track model experiments.
+- ✅ Define and deploy a **SageMaker Pipeline** (preprocess → train → register model).
+- ✅ Automate the whole pipeline via **GitHub Actions** on code push.
+
+---
+
+## 🗂️ Project Directory Structure
+
+```bash
+mlops-churn-project/
+├── preprocessing.py        # Data cleaning and feature engineering
+├── train.py                # Train XGBoost model, log with MLflow, save model artifacts
+├── evaluate.py             # Evaluate trained model performance metrics
+├── churn_pipeline.py       # Define SageMaker pipeline with training, evaluation, registration
+├── requirements.txt        # Python dependencies
+├── .github/
+│   └── workflows/
+│       └── train-deploy.yml  # GitHub Actions workflow to run pipeline on push
+⚙️ Step-by-Step Breakdown
+✅ Step 1: preprocessing.py
+python
+Copy
+Edit
+# Cleans and encodes data for ML model consumption
+def preprocess(input_path, output_path):
+    ...
+Drops unnecessary columns
+
+Converts Churn label to binary
+
+Handles missing values
+
+Encodes categorical features
+
+Saves cleaned CSV
+
+✅ Step 2: train.py (MLflow integrated)
+python
+Copy
+Edit
+# Trains an XGBoost model and logs metrics + artifacts to MLflow
+def train(train_path, model_output_dir):
+    ...
+Splits data into train/val
+
+Trains XGBoost with early stopping
+
+Logs accuracy to MLflow
+
+Saves model to path for SageMaker usage
+
+✅ Step 3: evaluate.py (Optional)
+python
+Copy
+Edit
+# Evaluates trained model on test data
+def evaluate(test_path, model_path):
+    ...
+Computes Accuracy, Precision, Recall
+
+Helpful for local testing outside of pipeline
+
+✅ Step 4: Define SageMaker Pipeline (churn_pipeline.py)
+PreprocessingStep — runs preprocessing.py inside a ScriptProcessor
+
+TrainingStep — runs train.py via XGBoost Estimator
+
+ModelStep — registers trained model to SageMaker Model Registry
+
+python
+Copy
+Edit
+pipeline = Pipeline(
+    name="churn-pipeline",
+    steps=[processing_step, train_step, register_model_step],
+)
+To deploy pipeline:
+
+bash
+Copy
+Edit
+python churn_pipeline.py
+✅ Step 5: Create Model Package Group (Run once)
+python
+Copy
+Edit
+import boto3
+client = boto3.client("sagemaker")
+client.create_model_package_group(ModelPackageGroupName="ChurnModelPackageGroup")
+✅ Step 6: GitHub Actions CI/CD Workflow
+Create this file: .github/workflows/train-deploy.yml
+
+yaml
+Copy
+Edit
+name: SageMaker Training and Model Registration
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  train:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v3
+
+      - name: Configure AWS Credentials
+        uses: aws-actions/configure-aws-credentials@v2
+        with:
+          aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+          aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          aws-region: ap-south-1
+
+      - name: Install Python dependencies
+        run: |
+          pip install --upgrade pip
+          pip install boto3 sagemaker mlflow xgboost pandas scikit-learn
+
+      - name: Trigger SageMaker Pipeline
+        run: |
+          python -c "
+import boto3
+client = boto3.client('sagemaker')
+response = client.start_pipeline_execution(PipelineName='churn-pipeline')
+print('Pipeline started:', response['PipelineExecutionArn'])
+"
+Note: Add AWS credentials as GitHub repo secrets:
+
+AWS_ACCESS_KEY_ID
+
+AWS_SECRET_ACCESS_KEY
+
+🚀 How to Run the Full Pipeline
+✅ Push your code to main branch of your GitHub repo
+
+✅ GitHub Actions automatically triggers the SageMaker pipeline
+
+✅ Monitor progress in SageMaker Studio > Pipelines
+
+✅ View experiment logs in MLflow UI (refer Part 1)
+
+✅ Approve the model manually in Model Registry
+
+🧠 Key Technologies
+AWS SageMaker: Training, Processing, Model Registry, Pipelines
+
+MLflow: Logging and experiment tracking
+
+GitHub Actions: CI/CD automation
+
+XGBoost: Model training
+
+Python: Core development language
+
+📬 Credits
+Made with ❤️ by Rajinikanth Vadla
+Trainer | DevOps | MLOps | AIOps Specialist
 
 ### **💡 Troubleshooting**  
 ❌ **"Access Denied" errors?** → Check IAM roles.  
