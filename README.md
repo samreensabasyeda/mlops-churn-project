@@ -45,7 +45,25 @@ aws s3 ls s3://mlops-churn-raw-data/raw/  # Should show your file
    - `AmazonSageMakerFullAccess`  
    - `AmazonS3FullAccess`  
    - `CloudWatchLogsFullAccess`  
-4. Name it **`SageMakerChurnRole`** and create.  
+4. Name it **`SageMakerChurnRole`** and create.
+5. UpDate Trust Policy
+   ```json
+   {
+    "Version": "2012-10-17",
+    "Statement": [
+        {
+            "Effect": "Allow",
+            "Principal": {
+                "Service": [
+                    "sagemaker.amazonaws.com",
+                    "s3.amazonaws.com"
+                ]
+            },
+            "Action": "sts:AssumeRole"
+        }
+    ]
+  }
+  ```
 
 ### **2.2 Lambda Role (Automates Training When New Data Comes)**  
 1. Same process, but select **Lambda** as the service.  
