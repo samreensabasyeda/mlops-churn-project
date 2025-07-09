@@ -100,6 +100,7 @@ try:
 
     xgb_estimator = XGBoost(
         entry_point="train.py",
+        source_dir=".",  # Include current directory with requirements.txt
         role=role,
         instance_type="ml.m5.xlarge",
         instance_count=1,
@@ -117,7 +118,9 @@ try:
             "MLFLOW_TRACKING_URI": "http://3.110.135.31:30418/",
             "MLFLOW_EXPERIMENT_NAME": "ChurnPrediction"
         },
-        base_job_name="churn-train"
+        base_job_name="churn-train",
+        # Ensure MLflow and other dependencies are installed
+        dependencies=["requirements.txt"]
     )
 
     train_step = TrainingStep(

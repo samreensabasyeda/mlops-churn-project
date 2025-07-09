@@ -37,12 +37,34 @@ def setup_mlflow():
         mlflow_uri = os.environ.get('MLFLOW_TRACKING_URI', 'http://3.110.135.31:30418/')
         experiment_name = os.environ.get('MLFLOW_EXPERIMENT_NAME', 'ChurnPrediction')
         
+        logger.info(f"Attempting to connect to MLflow at: {mlflow_uri}")
         mlflow.set_tracking_uri(mlflow_uri)
+        
+        # Try to create or get experiment
+        try:
+            experiment = mlflow.get_experiment_by_name(experiment_name)
+            if experiment is None:
+                logger.info(f"Creating new MLflow experiment: {experiment_name}")
+                mlflow.create_experiment(experiment_name)
+            else:
+                logger.info(f"Using existing MLflow experiment: {experiment_name}")
+        except Exception as exp_error:
+            logger.warning(f"Could not create/get experiment: {str(exp_error)}")
+        
         mlflow.set_experiment(experiment_name)
-        logger.info(f"MLflow tracking configured: {mlflow_uri}")
+        
+        # Test connection by starting and immediately ending a test run
+        test_run = mlflow.start_run(run_name="connection_test")
+        mlflow.log_param("test", "connection")
+        mlflow.end_run()
+        
+        logger.info(f"✅ MLflow connection successful: {mlflow_uri}")
+        logger.info(f"✅ Experiment: {experiment_name}")
         return True
+        
     except Exception as e:
-        logger.warning(f"MLflow configuration failed: {str(e)} - continuing without tracking")
+        logger.error(f"❌ MLflow connection failed: {str(e)}")
+        logger.warning("Training will continue without MLflow tracking")
         return False
 
 def load_data(train_path, val_path):
@@ -143,9 +165,23 @@ def train():
                 "roc_auc": roc_auc_score(y_val, preds),
             }
             
+            # Calculate training duration
+            duration = (datetime.now() - start_time).total_seconds()
+            
             # Log metrics to MLflow (if available)
             if mlflow_enabled and MLFLOW_AVAILABLE:
+                # Log hyperparameters
+                mlflow.log_params(params)
+                mlflow.log_param("num_boost_round", 100)
+                mlflow.log_param("early_stopping_rounds", 10)
+                mlflow.log_param("train_size", len(train_df))
+                mlflow.log_param("validation_size", len(val_df))
+                
+                # Log all metrics
                 mlflow.log_metrics(metrics)
+                
+                # Log additional metrics
+                mlflow.log_metric("training_time_seconds", duration)
                 
                 # Log confusion matrix
                 cm = confusion_matrix(y_val, preds_binary)
@@ -157,9 +193,18 @@ def train():
                 }
                 mlflow.log_dict(cm_dict, "confusion_matrix.json")
                 
+                # Log feature importance if available
+                try:
+                    importance = model.get_score(importance_type='weight')
+                    mlflow.log_dict(importance, "feature_importance.json")
+                except:
+                    logger.warning("Could not log feature importance")
+                
                 # Log model
                 mlflow.xgboost.log_model(model, "model")
-                logger.info("Model logged to MLflow")
+                logger.info("✅ All metrics and model logged to MLflow successfully")
+            else:
+                logger.warning("⚠️ MLflow not available - metrics not logged to experiment tracker")
             
             # Print metrics for SageMaker logs
             logger.info("Model metrics:")
@@ -176,7 +221,6 @@ def train():
             model.save_model(model_path)
             logger.info(f"Model saved to {model_path}")
             
-            duration = (datetime.now() - start_time).total_seconds()
             logger.info(f"Training completed in {duration:.2f} seconds")
             
         finally:
