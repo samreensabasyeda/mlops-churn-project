@@ -36,7 +36,8 @@ def preprocess():
         os.makedirs(os.path.dirname(val_path), exist_ok=True)
         #testing to resolve parser csv issue 
         logger.info(f"Reading input data from {input_path}")
-        df = pd.read_csv(input_path, sep='|', on_bad_lines='skip', header=None)
+        df = pd.read_csv(input_path, sep='|', error_bad_lines=False)
+        # df = pd.read_csv(input_path, sep='|', on_bad_lines='skip', header=None)
         # df = pd.read_csv(input_path, encoding='utf-8')
         
         # Validate input
