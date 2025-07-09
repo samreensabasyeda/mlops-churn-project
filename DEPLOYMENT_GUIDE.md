@@ -51,9 +51,40 @@ mlops-churn-project/
 3. **User Experience**: Visual risk indicators and recommendations
 4. **Access**: NodePort (30081) or LoadBalancer
 
-## 🚀 Quick Start Deployment
+## 🚀 Deployment Options
 
-### Prerequisites
+### Option 1: GitHub Actions (Recommended)
+**Automated deployment using GitHub Actions workflows**
+
+#### Prerequisites
+- ✅ GitHub repository with this code
+- ✅ EKS cluster "churnmodel" running
+- ✅ AWS credentials added as GitHub secrets
+
+#### Setup GitHub Secrets
+```bash
+# Add these secrets to your GitHub repository:
+# Settings > Secrets and variables > Actions > New repository secret
+
+AWS_ACCESS_KEY_ID=your_access_key_here
+AWS_SECRET_ACCESS_KEY=your_secret_key_here
+```
+
+#### Available Workflows
+1. **🔧 Deploy FastAPI to EKS** - Deploy backend API only
+2. **🎨 Deploy UI to EKS** - Deploy frontend UI only  
+3. **🚀 Deploy Complete Stack** - Deploy both FastAPI + UI together
+
+#### How to Use
+1. Go to **GitHub Actions** tab in your repository
+2. Select the workflow you want to run
+3. Click **"Run workflow"**
+4. Choose environment and options
+5. Click **"Run workflow"** to start deployment
+
+### Option 2: Manual Deployment
+
+#### Prerequisites
 ```bash
 # Ensure you have:
 # ✅ EKS cluster "churnmodel" running

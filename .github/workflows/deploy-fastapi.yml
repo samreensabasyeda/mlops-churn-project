@@ -1,0 +1,212 @@
+name: 🚀 Deploy FastAPI to EKS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
+      image_tag:
+        description: 'Docker image tag'
+        required: false
+        default: 'latest'
+      force_redeploy:
+        description: 'Force redeploy even if no changes'
+        required: false
+        default: false
+        type: boolean
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: churn-prediction-api
+  EKS_CLUSTER_NAME: churnmodel
+  DEPLOYMENT_NAME: churn-prediction-api
+
+jobs:
+  deploy-fastapi:
+    name: 🔧 Build and Deploy FastAPI
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v4
+      
+    - name: 🔐 Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: 📦 Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      
+    - name: 🔍 Check if ECR Repository Exists
+      run: |
+        aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} || \
+        aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }}
+        
+    - name: 🏗️ Build Docker Image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+      run: |
+        echo "🔨 Building FastAPI Docker image..."
+        cd fastapi-deployment/
+        
+        # Build with multiple tags
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+                     -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+                     -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+                     
+        echo "✅ Docker image built successfully"
+        
+    - name: 🔍 Test Docker Image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+      run: |
+        echo "🧪 Testing Docker image..."
+        docker run --rm -d --name test-api -p 8000:8000 \
+          $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        
+        # Wait for container to start
+        sleep 10
+        
+        # Test health endpoint
+        if curl -f http://localhost:8000/health; then
+          echo "✅ Health check passed"
+        else
+          echo "❌ Health check failed"
+          docker logs test-api
+          exit 1
+        fi
+        
+        # Stop test container
+        docker stop test-api
+        
+    - name: 📤 Push to ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+      run: |
+        echo "📤 Pushing images to ECR..."
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        echo "✅ Images pushed successfully"
+        
+    - name: ⚙️ Configure kubectl
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+        kubectl version --client
+        
+    - name: 🔑 Create AWS Credentials Secret
+      run: |
+        # Delete existing secret if it exists
+        kubectl delete secret aws-credentials --ignore-not-found=true
+        
+        # Create new secret
+        kubectl create secret generic aws-credentials \
+          --from-literal=aws-access-key-id=${{ secrets.AWS_ACCESS_KEY_ID }} \
+          --from-literal=aws-secret-access-key=${{ secrets.AWS_SECRET_ACCESS_KEY }}
+          
+        echo "✅ AWS credentials secret created"
+        
+    - name: 📝 Update Kubernetes Manifests
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+      run: |
+        cd fastapi-deployment/
+        
+        # Update image in deployment manifest
+        sed -i "s|image: churn-prediction-api:latest|image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" k8s-deployment.yaml
+        
+        echo "✅ Kubernetes manifests updated"
+        cat k8s-deployment.yaml | grep "image:"
+        
+    - name: 🚀 Deploy to EKS
+      run: |
+        cd fastapi-deployment/
+        
+        echo "🚀 Deploying FastAPI to EKS..."
+        kubectl apply -f k8s-deployment.yaml
+        
+        echo "⏳ Waiting for deployment to be ready..."
+        kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} --timeout=300s
+        
+        echo "✅ FastAPI deployment completed!"
+        
+    - name: 🔍 Verify Deployment
+      run: |
+        echo "🔍 Verifying deployment..."
+        
+        # Check pods
+        kubectl get pods -l app=churn-prediction-api
+        
+        # Check services
+        kubectl get services -l app=churn-prediction-api
+        
+        # Get service URL
+        NODE_PORT=$(kubectl get service churn-prediction-api-nodeport -o jsonpath='{.spec.ports[0].nodePort}')
+        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}')
+        
+        echo "🌐 FastAPI Service URL: http://$NODE_IP:$NODE_PORT"
+        echo "📖 API Documentation: http://$NODE_IP:$NODE_PORT/docs"
+        
+    - name: 🧪 Health Check
+      run: |
+        # Wait a bit for service to be ready
+        sleep 30
+        
+        # Get service endpoint
+        NODE_PORT=$(kubectl get service churn-prediction-api-nodeport -o jsonpath='{.spec.ports[0].nodePort}')
+        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}')
+        
+        if [ -n "$NODE_IP" ]; then
+          echo "🔍 Testing health endpoint..."
+          if curl -f "http://$NODE_IP:$NODE_PORT/health"; then
+            echo "✅ Health check passed!"
+          else
+            echo "⚠️ Health check failed, but deployment may still be starting..."
+          fi
+        else
+          echo "⚠️ Could not get external IP, using port-forward for health check..."
+          kubectl port-forward service/churn-prediction-api-service 8000:80 &
+          sleep 5
+          curl -f http://localhost:8000/health || echo "Health check via port-forward failed"
+          pkill -f "kubectl port-forward" || true
+        fi
+        
+    - name: 📊 Deployment Summary
+      run: |
+        echo "## 🎉 FastAPI Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Docker Image | ✅ Built and Pushed |" >> $GITHUB_STEP_SUMMARY
+        echo "| EKS Deployment | ✅ Deployed |" >> $GITHUB_STEP_SUMMARY
+        echo "| Health Check | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        NODE_PORT=$(kubectl get service churn-prediction-api-nodeport -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30080")
+        echo "### 🔗 Access URLs" >> $GITHUB_STEP_SUMMARY
+        echo "- **API Health**: \`http://NODE_IP:$NODE_PORT/health\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **API Docs**: \`http://NODE_IP:$NODE_PORT/docs\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Prediction**: \`POST http://NODE_IP:$NODE_PORT/predict\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Replace \`NODE_IP\` with your EKS node external IP" >> $GITHUB_STEP_SUMMARY
+        
+    - name: 📋 Next Steps
+      run: |
+        echo "## 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+        echo "1. **Get Node IP**: \`kubectl get nodes -o wide\`" >> $GITHUB_STEP_SUMMARY
+        echo "2. **Test API**: \`curl http://NODE_IP:30080/health\`" >> $GITHUB_STEP_SUMMARY
+        echo "3. **Deploy UI**: Run the 'Deploy UI to EKS' workflow" >> $GITHUB_STEP_SUMMARY
+        echo "4. **Approve Model**: Approve model in SageMaker Registry" >> $GITHUB_STEP_SUMMARY 

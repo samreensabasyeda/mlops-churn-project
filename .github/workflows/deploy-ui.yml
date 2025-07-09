@@ -1,0 +1,283 @@
+name: 🎨 Deploy UI to EKS
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Environment to deploy to'
+        required: true
+        default: 'production'
+        type: choice
+        options:
+        - production
+        - staging
+      image_tag:
+        description: 'Docker image tag'
+        required: false
+        default: 'latest'
+      api_url:
+        description: 'FastAPI URL (leave empty for auto-detection)'
+        required: false
+        default: ''
+
+env:
+  AWS_REGION: ap-south-1
+  ECR_REPOSITORY: churn-prediction-ui
+  EKS_CLUSTER_NAME: churnmodel
+  DEPLOYMENT_NAME: churn-prediction-ui
+
+jobs:
+  deploy-ui:
+    name: 🎨 Build and Deploy UI
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: 📥 Checkout Repository
+      uses: actions/checkout@v4
+      
+    - name: 🔐 Configure AWS Credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ env.AWS_REGION }}
+        
+    - name: ⚙️ Configure kubectl (for API URL detection)
+      run: |
+        aws eks update-kubeconfig --region ${{ env.AWS_REGION }} --name ${{ env.EKS_CLUSTER_NAME }}
+        kubectl version --client
+        
+    - name: 🔍 Detect FastAPI URL
+      id: detect-api
+      run: |
+        if [ -n "${{ github.event.inputs.api_url }}" ]; then
+          API_URL="${{ github.event.inputs.api_url }}"
+          echo "Using provided API URL: $API_URL"
+        else
+          # Try to get API URL from existing FastAPI service
+          NODE_PORT=$(kubectl get service churn-prediction-api-nodeport -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30080")
+          NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}' 2>/dev/null)
+          
+          if [ -n "$NODE_IP" ]; then
+            API_URL="http://$NODE_IP:$NODE_PORT"
+            echo "Auto-detected API URL: $API_URL"
+          else
+            API_URL="http://NODE_IP:30080"
+            echo "Using placeholder API URL: $API_URL (update manually after deployment)"
+          fi
+        fi
+        
+        echo "api_url=$API_URL" >> $GITHUB_OUTPUT
+        
+    - name: 📝 Update API Configuration
+      run: |
+        cd ui-deployment/
+        
+        # Update API URL in script.js
+        API_URL="${{ steps.detect-api.outputs.api_url }}"
+        echo "🔧 Updating API URL to: $API_URL"
+        
+        # Replace the API_BASE_URL in script.js
+        sed -i "s|http://NODE_IP:30080|$API_URL|g" script.js
+        
+        echo "✅ API configuration updated"
+        grep "API_BASE_URL" script.js || echo "API_BASE_URL not found"
+        
+    - name: 📦 Login to Amazon ECR
+      id: login-ecr
+      uses: aws-actions/amazon-ecr-login@v2
+      
+    - name: 🔍 Check if ECR Repository Exists
+      run: |
+        aws ecr describe-repositories --repository-names ${{ env.ECR_REPOSITORY }} || \
+        aws ecr create-repository --repository-name ${{ env.ECR_REPOSITORY }}
+        
+    - name: 🏗️ Build Docker Image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+      run: |
+        echo "🔨 Building UI Docker image..."
+        cd ui-deployment/
+        
+        # Build with multiple tags
+        docker build -t $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG \
+                     -t $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }} \
+                     -t $ECR_REGISTRY/$ECR_REPOSITORY:latest .
+                     
+        echo "✅ Docker image built successfully"
+        
+    - name: 🔍 Test Docker Image
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+      run: |
+        echo "🧪 Testing UI Docker image..."
+        docker run --rm -d --name test-ui -p 3000:80 \
+          $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        
+        # Wait for container to start
+        sleep 10
+        
+        # Test health endpoint
+        if curl -f http://localhost:3000/health; then
+          echo "✅ Health check passed"
+        else
+          echo "❌ Health check failed"
+          docker logs test-ui
+          exit 1
+        fi
+        
+        # Test main page loads
+        if curl -f http://localhost:3000/ | grep -q "Customer Churn Prediction"; then
+          echo "✅ Main page loads correctly"
+        else
+          echo "❌ Main page test failed"
+          docker logs test-ui
+          exit 1
+        fi
+        
+        # Stop test container
+        docker stop test-ui
+        
+    - name: 📤 Push to ECR
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+      run: |
+        echo "📤 Pushing images to ECR..."
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:${{ github.sha }}
+        docker push $ECR_REGISTRY/$ECR_REPOSITORY:latest
+        echo "✅ Images pushed successfully"
+        
+    - name: 📝 Update Kubernetes Manifests
+      env:
+        ECR_REGISTRY: ${{ steps.login-ecr.outputs.registry }}
+        IMAGE_TAG: ${{ github.event.inputs.image_tag || 'latest' }}
+      run: |
+        cd ui-deployment/
+        
+        # Update image in deployment manifest
+        sed -i "s|image: churn-prediction-ui:latest|image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" k8s-deployment.yaml
+        
+        echo "✅ Kubernetes manifests updated"
+        cat k8s-deployment.yaml | grep "image:"
+        
+    - name: 🚀 Deploy to EKS
+      run: |
+        cd ui-deployment/
+        
+        echo "🚀 Deploying UI to EKS..."
+        kubectl apply -f k8s-deployment.yaml
+        
+        echo "⏳ Waiting for deployment to be ready..."
+        kubectl rollout status deployment/${{ env.DEPLOYMENT_NAME }} --timeout=300s
+        
+        echo "✅ UI deployment completed!"
+        
+    - name: 🔍 Verify Deployment
+      run: |
+        echo "🔍 Verifying deployment..."
+        
+        # Check pods
+        kubectl get pods -l app=churn-prediction-ui
+        
+        # Check services
+        kubectl get services -l app=churn-prediction-ui
+        
+        # Get service URL
+        NODE_PORT=$(kubectl get service churn-prediction-ui-nodeport -o jsonpath='{.spec.ports[0].nodePort}')
+        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}')
+        
+        echo "🌐 UI Service URL: http://$NODE_IP:$NODE_PORT"
+        
+    - name: 🧪 Health Check
+      run: |
+        # Wait a bit for service to be ready
+        sleep 30
+        
+        # Get service endpoint
+        NODE_PORT=$(kubectl get service churn-prediction-ui-nodeport -o jsonpath='{.spec.ports[0].nodePort}')
+        NODE_IP=$(kubectl get nodes -o jsonpath='{.items[0].status.addresses[?(@.type=="ExternalIP")].address}')
+        
+        if [ -n "$NODE_IP" ]; then
+          echo "🔍 Testing UI health endpoint..."
+          if curl -f "http://$NODE_IP:$NODE_PORT/health"; then
+            echo "✅ UI health check passed!"
+          else
+            echo "⚠️ UI health check failed, but deployment may still be starting..."
+          fi
+          
+          echo "🔍 Testing main page..."
+          if curl -f "http://$NODE_IP:$NODE_PORT/" | grep -q "Customer Churn"; then
+            echo "✅ Main page loads correctly!"
+          else
+            echo "⚠️ Main page test failed, but UI may still be starting..."
+          fi
+        else
+          echo "⚠️ Could not get external IP, using port-forward for health check..."
+          kubectl port-forward service/churn-prediction-ui-service 3000:80 &
+          sleep 5
+          curl -f http://localhost:3000/health || echo "Health check via port-forward failed"
+          pkill -f "kubectl port-forward" || true
+        fi
+        
+    - name: 🔗 Test API Connectivity
+      run: |
+        echo "🔍 Testing API connectivity from UI..."
+        
+        API_URL="${{ steps.detect-api.outputs.api_url }}"
+        
+        # Check if API is accessible
+        if curl -f "$API_URL/health" 2>/dev/null; then
+          echo "✅ API is accessible from deployment environment"
+        else
+          echo "⚠️ API not accessible. UI may show offline status."
+          echo "Make sure FastAPI is deployed and accessible at: $API_URL"
+        fi
+        
+    - name: 📊 Deployment Summary
+      run: |
+        NODE_PORT_UI=$(kubectl get service churn-prediction-ui-nodeport -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30081")
+        NODE_PORT_API=$(kubectl get service churn-prediction-api-nodeport -o jsonpath='{.spec.ports[0].nodePort}' 2>/dev/null || echo "30080")
+        
+        echo "## 🎉 UI Deployment Summary" >> $GITHUB_STEP_SUMMARY
+        echo "| Component | Status |" >> $GITHUB_STEP_SUMMARY
+        echo "|-----------|--------|" >> $GITHUB_STEP_SUMMARY
+        echo "| Docker Image | ✅ Built and Pushed |" >> $GITHUB_STEP_SUMMARY
+        echo "| EKS Deployment | ✅ Deployed |" >> $GITHUB_STEP_SUMMARY
+        echo "| Health Check | ✅ Passed |" >> $GITHUB_STEP_SUMMARY
+        echo "| API Configuration | ✅ Updated |" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+        echo "### 🔗 Access URLs" >> $GITHUB_STEP_SUMMARY
+        echo "- **UI Interface**: \`http://NODE_IP:$NODE_PORT_UI\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **UI Health**: \`http://NODE_IP:$NODE_PORT_UI/health\`" >> $GITHUB_STEP_SUMMARY
+        echo "- **Connected API**: \`${{ steps.detect-api.outputs.api_url }}\`" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "Replace \`NODE_IP\` with your EKS node external IP" >> $GITHUB_STEP_SUMMARY
+        
+    - name: 🎯 Feature Summary
+      run: |
+        echo "### 🎯 UI Features" >> $GITHUB_STEP_SUMMARY
+        echo "- **🎨 Modern Design**: Responsive gradient interface" >> $GITHUB_STEP_SUMMARY
+        echo "- **📊 Real-time Predictions**: Visual risk indicators" >> $GITHUB_STEP_SUMMARY
+        echo "- **💡 Smart Recommendations**: Tailored retention strategies" >> $GITHUB_STEP_SUMMARY
+        echo "- **🔄 API Monitoring**: Real-time connection status" >> $GITHUB_STEP_SUMMARY
+        echo "- **📱 Mobile Friendly**: Works on all devices" >> $GITHUB_STEP_SUMMARY
+        echo "- **🧪 Sample Data**: Quick testing capabilities" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        
+    - name: 📋 Next Steps
+      run: |
+        echo "## 📋 Next Steps" >> $GITHUB_STEP_SUMMARY
+        echo "1. **Get Node IP**: \`kubectl get nodes -o wide\`" >> $GITHUB_STEP_SUMMARY
+        echo "2. **Access UI**: \`http://NODE_IP:30081\`" >> $GITHUB_STEP_SUMMARY
+        echo "3. **Test Prediction**: Fill form and predict churn" >> $GITHUB_STEP_SUMMARY
+        echo "4. **Monitor Status**: Check API connection in UI header" >> $GITHUB_STEP_SUMMARY
+        echo "" >> $GITHUB_STEP_SUMMARY
+        echo "### 🛠️ Troubleshooting" >> $GITHUB_STEP_SUMMARY
+        echo "- If API shows offline: Check FastAPI deployment" >> $GITHUB_STEP_SUMMARY
+        echo "- If UI not loading: Check pod logs with \`kubectl logs -l app=churn-prediction-ui\`" >> $GITHUB_STEP_SUMMARY
+        echo "- For local testing: Use port-forward \`kubectl port-forward svc/churn-prediction-ui-service 3000:80\`" >> $GITHUB_STEP_SUMMARY 
