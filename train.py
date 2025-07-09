@@ -1,6 +1,4 @@
 import os
-import mlflow
-import mlflow.xgboost
 import xgboost as xgb
 import pandas as pd
 import argparse
@@ -16,22 +14,36 @@ from sklearn.metrics import (
 import json
 from datetime import datetime
 
+# Try to import MLflow, but make it optional
+try:
+    import mlflow
+    import mlflow.xgboost
+    MLFLOW_AVAILABLE = True
+except ImportError:
+    MLFLOW_AVAILABLE = False
+    print("MLflow not available - training will continue without experiment tracking")
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 def setup_mlflow():
-    """Configure MLflow tracking"""
+    """Configure MLflow tracking - only if available"""
+    if not MLFLOW_AVAILABLE:
+        logger.warning("MLflow not available - skipping experiment tracking")
+        return False
+    
     try:
-        mlflow.set_tracking_uri(os.environ['MLFLOW_TRACKING_URI'])
-        mlflow.set_experiment(os.environ['MLFLOW_EXPERIMENT_NAME'])
-        logger.info("MLflow tracking configured successfully")
-    except KeyError as e:
-        logger.error(f"Missing required environment variable: {str(e)}")
-        raise
+        mlflow_uri = os.environ.get('MLFLOW_TRACKING_URI', 'http://3.110.135.31:30418/')
+        experiment_name = os.environ.get('MLFLOW_EXPERIMENT_NAME', 'ChurnPrediction')
+        
+        mlflow.set_tracking_uri(mlflow_uri)
+        mlflow.set_experiment(experiment_name)
+        logger.info(f"MLflow tracking configured: {mlflow_uri}")
+        return True
     except Exception as e:
-        logger.error(f"Error configuring MLflow: {str(e)}")
-        raise
+        logger.warning(f"MLflow configuration failed: {str(e)} - continuing without tracking")
+        return False
 
 def load_data(train_path, val_path):
     """Load and validate training data"""
@@ -56,14 +68,21 @@ def load_data(train_path, val_path):
 
 def train():
     try:
-        # Setup MLflow
-        setup_mlflow()
+        # Setup MLflow (optional)
+        mlflow_enabled = setup_mlflow()
         
         # Parse arguments
         parser = argparse.ArgumentParser()
         parser.add_argument('--train', type=str, default=os.environ.get('SM_CHANNEL_TRAIN'))
         parser.add_argument('--validation', type=str, default=os.environ.get('SM_CHANNEL_VALIDATION'))
         parser.add_argument('--model_dir', type=str, default=os.environ.get('SM_MODEL_DIR'))
+        
+        # XGBoost hyperparameters
+        parser.add_argument('--objective', type=str, default='binary:logistic')
+        parser.add_argument('--eval_metric', type=str, default='logloss')
+        parser.add_argument('--use_label_encoder', type=str, default='False')
+        parser.add_argument('--seed', type=int, default=42)
+        
         args = parser.parse_args()
         
         # Paths
@@ -85,16 +104,18 @@ def train():
         
         # Parameters
         params = {
-            "objective": "binary:logistic",
-            "eval_metric": "logloss",
-            "use_label_encoder": False,
-            "seed": 42
+            "objective": args.objective,
+            "eval_metric": args.eval_metric,
+            "use_label_encoder": args.use_label_encoder.lower() == 'true',
+            "seed": args.seed
         }
         
-        # Start MLflow run
-        with mlflow.start_run() as run:
-            logger.info(f"MLflow Run ID: {run.info.run_id}")
-            
+        # Start MLflow run (if available)
+        if mlflow_enabled and MLFLOW_AVAILABLE:
+            mlflow_run = mlflow.start_run()
+            logger.info(f"MLflow Run ID: {mlflow_run.info.run_id}")
+        
+        try:
             # Train model
             logger.info("Starting model training...")
             start_time = datetime.now()
@@ -122,25 +143,33 @@ def train():
                 "roc_auc": roc_auc_score(y_val, preds),
             }
             
-            # Log metrics
-            mlflow.log_metrics(metrics)
+            # Log metrics to MLflow (if available)
+            if mlflow_enabled and MLFLOW_AVAILABLE:
+                mlflow.log_metrics(metrics)
+                
+                # Log confusion matrix
+                cm = confusion_matrix(y_val, preds_binary)
+                cm_dict = {
+                    "true_negative": int(cm[0][0]),
+                    "false_positive": int(cm[0][1]),
+                    "false_negative": int(cm[1][0]),
+                    "true_positive": int(cm[1][1])
+                }
+                mlflow.log_dict(cm_dict, "confusion_matrix.json")
+                
+                # Log model
+                mlflow.xgboost.log_model(model, "model")
+                logger.info("Model logged to MLflow")
+            
+            # Print metrics for SageMaker logs
             logger.info("Model metrics:")
             for k, v in metrics.items():
                 logger.info(f"{k}: {v:.4f}")
             
-            # Log confusion matrix
-            cm = confusion_matrix(y_val, preds_binary)
-            cm_dict = {
-                "true_negative": int(cm[0][0]),
-                "false_positive": int(cm[0][1]),
-                "false_negative": int(cm[1][0]),
-                "true_positive": int(cm[1][1])
-            }
-            mlflow.log_dict(cm_dict, "confusion_matrix.json")
-            
-            # Log model
-            mlflow.xgboost.log_model(model, "model")
-            logger.info("Model logged to MLflow")
+            # Save metrics to file for SageMaker
+            metrics_path = os.path.join(args.model_dir, "metrics.json")
+            with open(metrics_path, 'w') as f:
+                json.dump(metrics, f, indent=2)
             
             # Save model for SageMaker
             model_path = os.path.join(args.model_dir, "xgboost-model")
@@ -149,6 +178,11 @@ def train():
             
             duration = (datetime.now() - start_time).total_seconds()
             logger.info(f"Training completed in {duration:.2f} seconds")
+            
+        finally:
+            # End MLflow run (if started)
+            if mlflow_enabled and MLFLOW_AVAILABLE:
+                mlflow.end_run()
             
     except Exception as e:
         logger.error(f"Error during training: {str(e)}", exc_info=True)
