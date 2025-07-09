@@ -1,0 +1,98 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: churn-prediction-api
+  namespace: default
+  labels:
+    app: churn-prediction-api
+    tier: backend
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: churn-prediction-api
+  template:
+    metadata:
+      labels:
+        app: churn-prediction-api
+        tier: backend
+    spec:
+      containers:
+      - name: fastapi
+        image: churn-prediction-api:latest
+        ports:
+        - containerPort: 8000
+          name: http
+        env:
+        - name: AWS_DEFAULT_REGION
+          value: "ap-south-1"
+        - name: AWS_ACCESS_KEY_ID
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: aws-access-key-id
+        - name: AWS_SECRET_ACCESS_KEY
+          valueFrom:
+            secretKeyRef:
+              name: aws-credentials
+              key: aws-secret-access-key
+        resources:
+          requests:
+            memory: "512Mi"
+            cpu: "250m"
+          limits:
+            memory: "1Gi"
+            cpu: "500m"
+        livenessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+          failureThreshold: 3
+        readinessProbe:
+          httpGet:
+            path: /health
+            port: 8000
+          initialDelaySeconds: 5
+          periodSeconds: 5
+          timeoutSeconds: 3
+          failureThreshold: 3
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: churn-prediction-api-service
+  namespace: default
+  labels:
+    app: churn-prediction-api
+spec:
+  type: ClusterIP
+  ports:
+  - port: 80
+    targetPort: 8000
+    protocol: TCP
+    name: http
+  selector:
+    app: churn-prediction-api
+---
+# Optional: NodePort service for external access
+apiVersion: v1
+kind: Service
+metadata:
+  name: churn-prediction-api-nodeport
+  namespace: default
+  labels:
+    app: churn-prediction-api
+spec:
+  type: NodePort
+  ports:
+  - port: 8000
+    targetPort: 8000
+    nodePort: 30080
+    protocol: TCP
+    name: http
+  selector:
+    app: churn-prediction-api 
