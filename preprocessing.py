@@ -34,9 +34,9 @@ def preprocess():
         # Create output directories
         os.makedirs(os.path.dirname(train_path), exist_ok=True)
         os.makedirs(os.path.dirname(val_path), exist_ok=True)
-        
+        #testing to resolve parser csv issue 
         logger.info(f"Reading input data from {input_path}")
-        df = pd.read_csv(input_path)
+        df = pd.read_csv(input_path, encoding='utf-8')
         
         # Validate input
         validate_data(df)
