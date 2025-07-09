@@ -2,7 +2,9 @@ import pandas as pd
 import os
 import logging
 import sys
+import csv
 from datetime import datetime
+from io import StringIO
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -10,7 +12,7 @@ logger = logging.getLogger(__name__)
 
 def validate_data(df):
     """Validate the input dataframe"""
-    required_columns = {'customerID', 'Churn', 'TotalCharges'}
+    required_columns = {'CustomerID', 'Churn', 'TotalCharges'}
     if not required_columns.issubset(df.columns):
         missing = required_columns - set(df.columns)
         raise ValueError(f"Missing required columns: {missing}")
@@ -34,9 +36,13 @@ def preprocess():
         # Create output directories
         os.makedirs(os.path.dirname(train_path), exist_ok=True)
         os.makedirs(os.path.dirname(val_path), exist_ok=True)
-        #testing to resolve parser csv issue 
+
+
+        #testing to resolve parser csv issue
+
         logger.info(f"Reading input data from {input_path}")
         df = pd.read_csv(input_path, sep='|', error_bad_lines=False)
+
         # df = pd.read_csv(input_path, sep='|', on_bad_lines='skip', header=None)
         # df = pd.read_csv(input_path, encoding='utf-8')
         
@@ -47,7 +53,7 @@ def preprocess():
         logger.info("Starting data preprocessing...")
         start_time = datetime.now()
         
-        df = df.drop(columns=['customerID'])
+        df = df.drop(columns=['CustomerID'])
         df['Churn'] = df['Churn'].apply(lambda x: 1 if x == 'Yes' else 0)
         
         # Handle missing values
