@@ -28,6 +28,7 @@ env:
   ECR_REPOSITORY_UI: churn-prediction-ui
   EKS_CLUSTER_NAME: churnmodel
   K8S_NAMESPACE: default
+  IMAGE_TAG: churnmodel
 
 jobs:
   deploy-fastapi:
