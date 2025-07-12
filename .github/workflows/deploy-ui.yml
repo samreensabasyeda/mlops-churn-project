@@ -117,8 +117,8 @@ jobs:
         echo "Updating image in deployment manifest..."
         sed -i "s|image: .*|image: $ECR_REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG|g" k8s-deployment.yaml
         
-        echo "Adding deployment timestamp..."
-        sed -i "/metadata:/a\\  annotations:\n    deployment.kubernetes.io/revision: \"$(date +%s)\"" k8s-deployment.yaml
+        # echo "Adding deployment timestamp..."
+        # sed -i "/metadata:/a\\  annotations:\n    deployment.kubernetes.io/revision: \"$(date +%s)\"" k8s-deployment.yaml
         
     - name: Deploy to EKS
       run: |
