@@ -1,0 +1,569 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: mlops-monitoring-config
+  namespace: default
+data:
+  prometheus.yml: |
+    global:
+      scrape_interval: 15s
+      evaluation_interval: 15s
+    
+    rule_files:
+      - "/etc/prometheus/rules.yml"
+    
+    scrape_configs:
+      - job_name: 'churn-prediction-api'
+        static_configs:
+          - targets: ['churn-prediction-api-service:80']
+        metrics_path: /metrics
+        scrape_interval: 30s
+        
+      - job_name: 'churn-prediction-ui'
+        static_configs:
+          - targets: ['churn-prediction-ui-service:80']
+        metrics_path: /metrics
+        scrape_interval: 30s
+        
+      - job_name: 'kubernetes-pods'
+        kubernetes_sd_configs:
+          - role: pod
+        relabel_configs:
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_scrape]
+            action: keep
+            regex: true
+          - source_labels: [__meta_kubernetes_pod_annotation_prometheus_io_path]
+            action: replace
+            target_label: __metrics_path__
+            regex: (.+)
+          - source_labels: [__address__, __meta_kubernetes_pod_annotation_prometheus_io_port]
+            action: replace
+            regex: ([^:]+)(?::\d+)?;(\d+)
+            replacement: $1:$2
+            target_label: __address__
+          - action: labelmap
+            regex: __meta_kubernetes_pod_label_(.+)
+          - source_labels: [__meta_kubernetes_namespace]
+            action: replace
+            target_label: kubernetes_namespace
+          - source_labels: [__meta_kubernetes_pod_name]
+            action: replace
+            target_label: kubernetes_pod_name
+            
+  rules.yml: |
+    groups:
+      - name: churn-prediction-api
+        rules:
+          - alert: ChurnAPIDown
+            expr: up{job="churn-prediction-api"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Churn Prediction API is down"
+              description: "Churn Prediction API has been down for more than 1 minute."
+              
+          - alert: ChurnAPIHighErrorRate
+            expr: rate(http_requests_total{job="churn-prediction-api",status=~"5.."}[5m]) > 0.1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High error rate in Churn Prediction API"
+              description: "Error rate is {{ $value | humanizePercentage }} for the last 5 minutes."
+              
+          - alert: ChurnAPIHighLatency
+            expr: histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job="churn-prediction-api"}[5m])) > 2
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High latency in Churn Prediction API"
+              description: "95th percentile latency is {{ $value }}s for the last 5 minutes."
+              
+          - alert: ChurnAPIModelNotLoaded
+            expr: model_loaded{job="churn-prediction-api"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Churn Prediction API model not loaded"
+              description: "Model has not been loaded in Churn Prediction API."
+              
+          - alert: ChurnAPIPodCrashLooping
+            expr: increase(kube_pod_container_status_restarts_total{pod=~"churn-prediction-api-.*"}[1h]) > 3
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Churn Prediction API pod crash looping"
+              description: "Pod {{ $labels.pod }} has restarted {{ $value }} times in the last hour."
+              
+      - name: churn-prediction-ui
+        rules:
+          - alert: ChurnUIDown
+            expr: up{job="churn-prediction-ui"} == 0
+            for: 1m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Churn Prediction UI is down"
+              description: "Churn Prediction UI has been down for more than 1 minute."
+              
+          - alert: ChurnUIHighErrorRate
+            expr: rate(nginx_http_requests_total{job="churn-prediction-ui",status=~"5.."}[5m]) > 0.1
+            for: 2m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High error rate in Churn Prediction UI"
+              description: "Error rate is {{ $value | humanizePercentage }} for the last 5 minutes."
+              
+          - alert: ChurnUIPodCrashLooping
+            expr: increase(kube_pod_container_status_restarts_total{pod=~"churn-prediction-ui-.*"}[1h]) > 3
+            for: 5m
+            labels:
+              severity: warning
+            annotations:
+              summary: "Churn Prediction UI pod crash looping"
+              description: "Pod {{ $labels.pod }} has restarted {{ $value }} times in the last hour."
+              
+      - name: kubernetes-resources
+        rules:
+          - alert: KubernetesPodCrashLooping
+            expr: increase(kube_pod_container_status_restarts_total{pod=~"churn-prediction-.*"}[1h]) > 5
+            for: 5m
+            labels:
+              severity: critical
+            annotations:
+              summary: "Kubernetes pod crash looping"
+              description: "Pod {{ $labels.pod }} has restarted {{ $value }} times in the last hour."
+              
+          - alert: KubernetesMemoryUsageHigh
+            expr: (container_memory_usage_bytes{pod=~"churn-prediction-.*"} / container_spec_memory_limit_bytes) * 100 > 90
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High memory usage in Kubernetes pod"
+              description: "Pod {{ $labels.pod }} memory usage is {{ $value | humanizePercentage }}."
+              
+          - alert: KubernetesCPUUsageHigh
+            expr: (rate(container_cpu_usage_seconds_total{pod=~"churn-prediction-.*"}[5m]) / container_spec_cpu_quota) * 100 > 90
+            for: 10m
+            labels:
+              severity: warning
+            annotations:
+              summary: "High CPU usage in Kubernetes pod"
+              description: "Pod {{ $labels.pod }} CPU usage is {{ $value | humanizePercentage }}."
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: prometheus-service
+  namespace: default
+  labels:
+    app: prometheus
+spec:
+  type: NodePort
+  ports:
+  - port: 9090
+    targetPort: 9090
+    nodePort: 30090
+    protocol: TCP
+    name: prometheus
+  selector:
+    app: prometheus
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: prometheus
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: prometheus
+  template:
+    metadata:
+      labels:
+        app: prometheus
+    spec:
+      containers:
+      - name: prometheus
+        image: prom/prometheus:latest
+        ports:
+        - containerPort: 9090
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/prometheus
+        - name: storage-volume
+          mountPath: /prometheus
+        args:
+          - '--config.file=/etc/prometheus/prometheus.yml'
+          - '--storage.tsdb.path=/prometheus'
+          - '--web.console.libraries=/usr/share/prometheus/console_libraries'
+          - '--web.console.templates=/usr/share/prometheus/consoles'
+          - '--web.enable-lifecycle'
+          - '--storage.tsdb.retention.time=7d'
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: mlops-monitoring-config
+      - name: storage-volume
+        emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: grafana-service
+  namespace: default
+  labels:
+    app: grafana
+spec:
+  type: NodePort
+  ports:
+  - port: 3000
+    targetPort: 3000
+    nodePort: 30030
+    protocol: TCP
+    name: grafana
+  selector:
+    app: grafana
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: grafana
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: grafana
+  template:
+    metadata:
+      labels:
+        app: grafana
+    spec:
+      containers:
+      - name: grafana
+        image: grafana/grafana:latest
+        ports:
+        - containerPort: 3000
+        env:
+        - name: GF_SECURITY_ADMIN_PASSWORD
+          value: "admin123"
+        - name: GF_USERS_ALLOW_SIGN_UP
+          value: "false"
+        - name: GF_INSTALL_PLUGINS
+          value: "grafana-kubernetes-app"
+        volumeMounts:
+        - name: grafana-storage
+          mountPath: /var/lib/grafana
+        - name: grafana-config
+          mountPath: /etc/grafana/provisioning
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "100m"
+          limits:
+            memory: "512Mi"
+            cpu: "200m"
+      volumes:
+      - name: grafana-storage
+        emptyDir: {}
+      - name: grafana-config
+        configMap:
+          name: grafana-config
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-config
+  namespace: default
+data:
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        access: proxy
+        url: http://prometheus-service:9090
+        isDefault: true
+        editable: true
+  dashboards.yaml: |
+    apiVersion: 1
+    providers:
+      - name: 'default'
+        orgId: 1
+        folder: ''
+        type: file
+        disableDeletion: false
+        editable: true
+        options:
+          path: /var/lib/grafana/dashboards
+  churn-api-dashboard.json: |
+    {
+      "dashboard": {
+        "id": null,
+        "title": "Churn Prediction API Dashboard",
+        "tags": ["mlops", "churn", "api"],
+        "timezone": "browser",
+        "panels": [
+          {
+            "id": 1,
+            "title": "API Health Status",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "up{job=\"churn-prediction-api\"}",
+                "legendFormat": "API Status"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "mappings": [
+                  {
+                    "options": {
+                      "0": {
+                        "text": "DOWN"
+                      },
+                      "1": {
+                        "text": "UP"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ],
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 0,
+              "y": 0
+            }
+          },
+          {
+            "id": 2,
+            "title": "Model Load Status",
+            "type": "stat",
+            "targets": [
+              {
+                "expr": "model_loaded{job=\"churn-prediction-api\"}",
+                "legendFormat": "Model Loaded"
+              }
+            ],
+            "fieldConfig": {
+              "defaults": {
+                "mappings": [
+                  {
+                    "options": {
+                      "0": {
+                        "text": "NOT LOADED"
+                      },
+                      "1": {
+                        "text": "LOADED"
+                      }
+                    },
+                    "type": "value"
+                  }
+                ],
+                "color": {
+                  "mode": "thresholds"
+                },
+                "thresholds": {
+                  "steps": [
+                    {
+                      "color": "red",
+                      "value": null
+                    },
+                    {
+                      "color": "green",
+                      "value": 1
+                    }
+                  ]
+                }
+              }
+            },
+            "gridPos": {
+              "h": 8,
+              "w": 12,
+              "x": 12,
+              "y": 0
+            }
+          },
+          {
+            "id": 3,
+            "title": "Request Rate",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "rate(http_requests_total{job=\"churn-prediction-api\"}[5m])",
+                "legendFormat": "Requests/sec"
+              }
+            ],
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 8
+            }
+          },
+          {
+            "id": 4,
+            "title": "Response Time",
+            "type": "graph",
+            "targets": [
+              {
+                "expr": "histogram_quantile(0.95, rate(http_request_duration_seconds_bucket{job=\"churn-prediction-api\"}[5m]))",
+                "legendFormat": "95th percentile"
+              },
+              {
+                "expr": "histogram_quantile(0.50, rate(http_request_duration_seconds_bucket{job=\"churn-prediction-api\"}[5m]))",
+                "legendFormat": "50th percentile"
+              }
+            ],
+            "gridPos": {
+              "h": 8,
+              "w": 24,
+              "x": 0,
+              "y": 16
+            }
+          }
+        ],
+        "refresh": "30s",
+        "time": {
+          "from": "now-1h",
+          "to": "now"
+        }
+      }
+    }
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alertmanager-config
+  namespace: default
+data:
+  alertmanager.yml: |
+    global:
+      smtp_smarthost: 'localhost:587'
+      smtp_from: 'alertmanager@example.com'
+    
+    route:
+      group_by: ['alertname']
+      group_wait: 10s
+      group_interval: 10s
+      repeat_interval: 1h
+      receiver: 'web.hook'
+      routes:
+        - match:
+            severity: critical
+          receiver: 'critical-alerts'
+        - match:
+            severity: warning
+          receiver: 'warning-alerts'
+    
+    receivers:
+      - name: 'web.hook'
+        webhook_configs:
+          - url: 'http://example.com/webhook'
+            
+      - name: 'critical-alerts'
+        webhook_configs:
+          - url: 'http://example.com/critical-webhook'
+            title: 'Critical Alert: {{ .GroupLabels.alertname }}'
+            
+      - name: 'warning-alerts'
+        webhook_configs:
+          - url: 'http://example.com/warning-webhook'
+            title: 'Warning Alert: {{ .GroupLabels.alertname }}'
+    
+    inhibit_rules:
+      - source_match:
+          severity: 'critical'
+        target_match:
+          severity: 'warning'
+        equal: ['alertname', 'instance']
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: alertmanager
+  namespace: default
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: alertmanager
+  template:
+    metadata:
+      labels:
+        app: alertmanager
+    spec:
+      containers:
+      - name: alertmanager
+        image: prom/alertmanager:latest
+        ports:
+        - containerPort: 9093
+        volumeMounts:
+        - name: config-volume
+          mountPath: /etc/alertmanager
+        args:
+          - '--config.file=/etc/alertmanager/alertmanager.yml'
+          - '--storage.path=/alertmanager'
+          - '--web.external-url=http://localhost:9093'
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "50m"
+          limits:
+            memory: "256Mi"
+            cpu: "100m"
+      volumes:
+      - name: config-volume
+        configMap:
+          name: alertmanager-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: alertmanager-service
+  namespace: default
+  labels:
+    app: alertmanager
+spec:
+  type: NodePort
+  ports:
+  - port: 9093
+    targetPort: 9093
+    nodePort: 30093
+    protocol: TCP
+    name: alertmanager
+  selector:
+    app: alertmanager 
